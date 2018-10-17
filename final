@@ -1,0 +1,379 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Creates an S3 bucket configured for hosting a static website, and a Route 53 DNS record pointing to the bucket",
+    "Parameters": {
+		"StackName": {
+            "Type": "String",
+            "Description": "Stack Name for Cloudformation"
+        },
+        "BucketName": {
+            "Type": "String",
+            "Description": "Bucket Name for CloudFront"
+        },
+		"Environment": {
+		  "Description": "Environment for the Stack",
+		  "Type": "String",
+		  "Default": "dev-def"
+		},
+        "S3Path": {
+            "Type": "String",
+            "Description": "path to be created in S3 bucket e.g. /public/images",
+            "Default": "/public/images"
+        },
+        "DomainName": {
+            "Type": "String",
+            "Default" : "spoddfw.com",
+            "Description": "The DNS name of an existing Amazon Route 53 hosted zone",
+            "AllowedPattern": "(?!-)[a-zA-Z0-9-.]{1,63}(?<!-)",
+            "ConstraintDescription": "must be a valid DNS zone name."
+        },
+        "FullDomainName": {
+            "Type": "String",
+            "Default" : "podcast-store-dev-def.spoddfw.com",
+            "Description": "The full domain name",
+            "AllowedPattern": "(?!-)[a-zA-Z0-9-.]{1,63}(?<!-)",
+            "ConstraintDescription": "must be a valid DNS zone name."
+        },
+        "AcmCertificateArn": {
+            "Type": "String",
+            "Default" : "arn:aws:acm:us-east-1:230443946157:certificate/5e3c8b56-4867-47a3-956a-97dce14bc075",
+            "Description": "the Amazon Resource Name (ARN) of an AWS Certificate Manager (ACM) certificate.",
+            "AllowedPattern": "arn:aws:acm:.*"
+        },
+		"SubnetCIDR": {
+		  "Description" : "Lockdown SSH access to the VPC CIDR Block",
+		  "Type" : "String",
+		  "MinLength": "9",
+		  "MaxLength": "18",
+		  "Default" : "162.246.218.28/32",
+		  "AllowedPattern" : "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+		  "ConstraintDescription" : "must be a valid CIDR range of the form x.x.x.x/x."
+		},
+		"VPCSecurityGroupIDs": {
+			"Description": "An comma-delimited list of strings - the security groups that your Lambda function and cache cluster should be in",
+			"Type": "CommaDelimitedList"
+		},
+		"VPCSubnetIDs": {
+			 "Description": "An comma-delimited list of strings - the subnet IDs that your Lambda function should be assigned to",
+			 "Type": "CommaDelimitedList"
+		},
+		"VPCID": {
+			 "Description": "VPC ID for Environment",
+			 "Type": "String"
+		}
+    },
+	"Mappings": {
+        "RegionMap": {
+            "us-east-1": {
+                "S3HostedZoneId": "Z3AQBSTGFYJSTF"
+            },
+            "us-west-1": {
+                "S3HostedZoneId": "Z2F56UZL2M1ACD"
+            },
+            "us-west-2": {
+                "S3HostedZoneId": "Z3BJ6K6RIION7M"
+            },
+            "eu-west-1": {
+                "S3HostedZoneId": "Z1BKCTXD74EZPE"
+            },
+            "ap-southeast-1": {
+                "S3HostedZoneId": "Z3O0J2DXBE1FTB"
+            },
+            "ap-southeast-2": {
+                "S3HostedZoneId": "Z1WCIGYICN2BYD"
+            },
+            "ap-northeast-1": {
+                "S3HostedZoneId": "Z2M4EHUR26P7ZW"
+            },
+            "sa-east-1": {
+                "S3HostedZoneId": "Z31GFT0UA1I2HV"
+            }
+        }
+    },
+    "Resources": {
+        "WebsiteBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "BucketName": {
+                    "Ref": "BucketName"
+                }
+            }
+        },
+        "WebsiteBucketPolicy": {
+            "Type": "AWS::S3::BucketPolicy",
+            "Properties": {
+                "Bucket": {
+                    "Ref": "WebsiteBucket"
+                },
+                "PolicyDocument": {
+                    "Statement": [
+                        {
+                            "Sid": "PolicyForCloudFrontPrivateContent",
+                            "Effect": "Allow",
+                            "Principal": { "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E2EADQCQ1J5RK1" },
+                            "Action": "s3:GetObject",
+                            "Resource": {
+                                "Fn::Join": [
+                                    "",
+                                    [
+                                        "arn:aws:s3:::",
+                                        {
+                                            "Ref": "WebsiteBucket"
+                                        },
+                                        "/*"
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+		"LambdaRolePolicy" : {
+		  "Type" : "AWS::IAM::Policy",
+		  "Properties" : {
+			"PolicyName" : {"Fn::Join" : [ "-", [ {"Ref":"Environment"}, {"Ref":"StackName"} , "Policy" ] ]},
+			"PolicyDocument" : {
+			  "Statement" : [
+				{
+				  "Effect" : "Allow",
+				  "Action" : [
+					"s3:*",
+					"cloudwatch:*",
+					"logs:*",
+					"ec2:CreateNetworkInterface",
+					"ec2:DescribeNetworkInterfaces",
+					"ec2:DeleteNetworkInterface"
+				  ],
+				  "Resource" : "*"
+				}
+			  ]
+			},
+			"Roles" : [
+			  {
+				"Ref" : "LambdaRole"
+			  }
+			]
+		  }
+		},
+		"LambdaRole" : {
+		  "Type" : "AWS::IAM::Role",
+		  "Properties" : {
+				"RoleName" : {"Fn::Join" : [ "-", [ {"Ref":"Environment"}, {"Ref":"StackName"} , "Role" ] ]},
+			"AssumeRolePolicyDocument": {
+			  "Version" : "2012-10-17",
+			  "Statement" : [
+				{
+				  "Effect" : "Allow",
+				  "Principal" : {
+					"Service" : ["lambda.amazonaws.com", "edgelambda.amazonaws.com"]
+				  },
+				  "Action" : [
+					"sts:AssumeRole"
+				  ]
+				}
+			  ]
+			},
+			"Path" : "/service-role/"
+		  }
+		},
+        "LambdaFunction": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": {
+                    "Fn::Join" : [ "", [ {"Ref":"Environment"}, "-", "ImageCaching" , "ViewerRequest" ] ]
+                },
+                "Description": "Lambda Function of nodejs",
+                "Runtime": "nodejs6.10",
+                "Code": {
+                    "ZipFile": { "Fn::Join": ["", [
+                                                                  "exports.handler = function(event, context) {",
+                                                                  "console.log('Hello, Cloudwatch!');",
+                                                                  " context.succeed('Hello, World!');",
+                                                                  "};"
+                                                                ]]}
+                },
+                "Handler": "index.handler",
+                "MemorySize": 128,
+                "Timeout": 10,
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "VpcConfig": {
+                        "SecurityGroupIds": { "Ref": "VPCSecurityGroupIDs" },
+                        "SubnetIds": { "Ref": "VPCSubnetIDs" }
+                },
+                "Environment": {
+                    "Variables": {
+                        "NODE_ENV": {"Ref":"Environment"}
+                    }
+                }
+            }
+        },
+		"VersionedLambdaFunction": {
+			"Type" : "AWS::Lambda::Version",
+			"Properties" : {
+			  "FunctionName": {"Ref":"LambdaFunction"}
+			}
+		},
+		"LambdaFunction2": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": {
+                    "Fn::Join" : [ "", [ {"Ref":"Environment"}, "-", "ImageCaching" , "OriginResponse" ] ]
+                },
+                "Description": "Lambda Function of nodejs",
+                "Runtime": "nodejs6.10",
+                "Code": {
+                    "ZipFile": { "Fn::Join": ["", [
+                                                                  "exports.handler = function(event, context) {",
+                                                                  "console.log('Hello, Cloudwatch!');",
+                                                                  " context.succeed('Hello, World!');",
+                                                                  "};"
+                                                                ]]}
+                },
+                "Handler": "index.handler",
+                "MemorySize": 128,
+                "Timeout": 10,
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "VpcConfig": {
+                        "SecurityGroupIds": { "Ref": "VPCSecurityGroupIDs" },
+                        "SubnetIds": { "Ref": "VPCSubnetIDs" }
+                },
+                "Environment": {
+                    "Variables": {
+                        "NODE_ENV": {"Ref":"Environment"}
+                    }
+                }
+            }
+        },
+		"VersionedLambdaFunction2": {
+			"Type" : "AWS::Lambda::Version",
+			"Properties" : {
+			  "FunctionName": {"Ref":"LambdaFunction2"}
+			}
+		},
+		"WebsiteCloudfront": {
+            "Type": "AWS::CloudFront::Distribution",
+            "Properties": {
+                "DistributionConfig": {
+                    "Comment": "Cloudfront Distribution pointing to S3 bucket",
+                    "Origins": [
+                        {
+                            "DomainName": { "Fn::Join" : ["", [{ "Ref" : "BucketName" }, ".s3.amazonaws.com"]]},
+                                                        "OriginPath": "/public/images",
+                            "Id": "S3Origin",
+                            "S3OriginConfig" : {
+                                "OriginAccessIdentity" : "origin-access-identity/cloudfront/E2EADQCQ1J5RK1"
+                                }
+                        }
+                    ],
+                    "Enabled": true,
+                    "HttpVersion": "http2",
+                    "DefaultRootObject": "index.html",
+                    "Aliases": [
+                        {
+                            "Ref": "FullDomainName"
+                        }
+                    ],
+                    "DefaultCacheBehavior": {
+                        "AllowedMethods": [
+                            "GET",
+                            "HEAD"
+                        ],
+                        "Compress": true,
+                        "TargetOriginId": "S3Origin",
+                        "ForwardedValues": {
+                            "QueryString": true,
+                            "Cookies": {
+                                "Forward": "none"
+                            }
+                        },
+                        "ViewerProtocolPolicy": "redirect-to-https",
+						"LambdaFunctionAssociations" : [
+							{
+							  "EventType" : "viewer-request",
+							  "LambdaFunctionARN" : {"Ref":"VersionedLambdaFunction"}
+							},
+							{
+							  "EventType" : "origin-response",
+							  "LambdaFunctionARN" : {"Ref":"VersionedLambdaFunction2"}
+							}
+						]
+                    },
+                    "PriceClass": "PriceClass_All",
+                    "ViewerCertificate": {
+                        "AcmCertificateArn": {
+                            "Ref": "AcmCertificateArn"
+                        },
+                        "SslSupportMethod": "sni-only"
+                    }
+                }
+            }
+        },
+        "WebsiteDNSName": {
+            "Type": "AWS::Route53::RecordSetGroup",
+            "Properties": {
+                "HostedZoneName": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            {
+                                "Ref": "DomainName"
+                            },
+                            "."
+                        ]
+                    ]
+                },
+                "RecordSets": [
+                    {
+                        "Name": {
+                            "Ref": "FullDomainName"
+                        },
+                        "Type": "A",
+                        "AliasTarget": {
+                            "HostedZoneId": "Z2FDTNDATAQYW2",
+                            "DNSName": {
+                                "Fn::GetAtt": [
+                                    "WebsiteCloudfront",
+                                    "DomainName"
+                                ]
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    },
+    "Outputs": {
+        "BucketName": {
+            "Value": {
+                "Ref": "WebsiteBucket"
+            },
+            "Description": "Name of S3 bucket to hold website content"
+        },
+		"CloudfrontEndpoint": {
+            "Value": {
+                "Fn::GetAtt": [
+                    "WebsiteCloudfront",
+                    "DomainName"
+                ]
+            },
+            "Description": "Endpoint for Cloudfront distribution"
+        },
+        "FullDomain": {
+            "Value": {
+                "Ref": "FullDomainName"
+            },
+            "Description": "Full DomainName"
+        }
+    }
+}
